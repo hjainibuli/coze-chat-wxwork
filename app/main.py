@@ -16,7 +16,7 @@ from schema import WeChatMessage, WeChatTokenMessage, WechatMsgEntity, WechatMsg
 from util.wx_biz_json_msg_crypt import WXBizJsonMsgCrypt
 from wework import check_signature, parse_wechat_message, select_msgs, send_text_msg, download_wechat_image, \
     _cachable_token, handle_image_msg
-from wework import async_send_text_msg, async_handle_image
+from wework import async_send_text_msg, async_handle_media
 from call_coze_api import get_or_create_latest_conversation, call_coze_workflow, get_or_create_internal_user, \
     async_call_coze_workflow
 import asyncio
@@ -257,7 +257,7 @@ def process_msg(token: str, cursor: str, background_tasks: BackgroundTasks):
         # CASE 2: 处理图片消息
         # ==========================================
         elif msg_type == 'image':
-            # print(msg) # 调试完可以注释掉，避免日志过多
+            print(f"======================================media_msg{str(msg)}") # 调试完可以注释掉，避免日志过多
             # ✅ 优化点：直接判断 msg.image 即可，不需要 hasattr 了
             if msg.image and msg.image.get('media_id'):
                 media_id = msg.image.get('media_id')
@@ -265,7 +265,27 @@ def process_msg(token: str, cursor: str, background_tasks: BackgroundTasks):
                 # ✅ 修改点 2: 不要在这里下载！直接提交给线程池
                 # 将 耗时的“获取Token” 和 “下载图片” 都移出主线程
                 # thread_pool.submit(handle_image_msg, msg, token)
-                background_tasks.add_task(async_handle_image, msg)
+                background_tasks.add_task(async_handle_media, msg, msg_type)
+        elif msg_type == 'video':
+            print(f"======================================media_msg{str(msg)}") # 调试完可以注释掉，避免日志过多
+            # ✅ 优化点：直接判断 msg.image 即可，不需要 hasattr 了
+            if msg.video and msg.video.get('media_id'):
+                media_id = msg.video.get('media_id')
+                LOGGER.info(f"收到视频消息: msgid={msg.msgid}, media_id={media_id}")
+                # ✅ 修改点 2: 不要在这里下载！直接提交给线程池
+                # 将 耗时的“获取Token” 和 “下载图片” 都移出主线程
+                # thread_pool.submit(handle_image_msg, msg, token)
+                background_tasks.add_task(async_handle_media, msg, msg_type)
+        elif msg_type == 'voice':
+            print(f"======================================media_msg{str(msg)}") # 调试完可以注释掉，避免日志过多
+            # ✅ 优化点：直接判断 msg.image 即可，不需要 hasattr 了
+            if msg.voice and msg.voice.get('media_id'):
+                media_id = msg.voice.get('media_id')
+                LOGGER.info(f"收到语音消息: msgid={msg.msgid}, media_id={media_id}")
+                # ✅ 修改点 2: 不要在这里下载！直接提交给线程池
+                # 将 耗时的“获取Token” 和 “下载图片” 都移出主线程
+                # thread_pool.submit(handle_image_msg, msg, token)
+                background_tasks.add_task(async_handle_media, msg, msg_type)
 
         # ==========================================
         # CASE 3: 其他类型

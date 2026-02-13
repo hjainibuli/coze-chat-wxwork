@@ -301,9 +301,18 @@ def reply_msg(msgid: str, external_userid: str, open_kfid: str, content: str):
 '''
 
 
-async def async_download_wechat_image(media_id: str, msg_id: str, access_token: str) -> str:
+async def async_download_wechat_media(media_id: str, msg_id: str, access_token: str, message_type: str) -> str:
     """
-    [异步版] 下载微信图片到本地 static 目录，并返回可访问的 HTTP URL
+    [异步版] 下载微信媒体文件到本地 static 目录，并返回可访问的 HTTP URL
+
+    Args:
+        media_id: 微信媒体ID
+        msg_id: 消息ID
+        access_token: 企业微信访问令牌
+        message_type: 消息类型 (image/video/voice)
+
+    Returns:
+        str: 可访问的HTTP URL，失败时返回 None
     """
     url = f"https://qyapi.weixin.qq.com/cgi-bin/media/get"
     params = {
@@ -312,37 +321,71 @@ async def async_download_wechat_image(media_id: str, msg_id: str, access_token: 
     }
 
     try:
-        # ✅ 改动1: 使用 httpx 进行异步网络请求
+        # ✅ 使用 httpx 进行异步网络请求
         async with httpx.AsyncClient() as client:
             response = await client.get(url, params=params)
 
-            # httpx 的错误检查
+            # 网络请求错误检查
             if response.status_code != 200:
-                LOGGER.error(f"下载图片网络请求失败: {response.status_code}")
+                LOGGER.error(f"下载媒体网络请求失败: {response.status_code}")
                 return None
 
-            # 简单判断 Content-Type (注意：httpx headers key 是不区分大小写的)
+            # 检查是否返回的是错误信息（JSON格式）
             content_type = response.headers.get("Content-Type", "")
             if "application/json" in content_type:
-                LOGGER.error(f"下载图片失败，微信返回不是图片: {response.text}")
+                LOGGER.error(f"下载媒体失败，微信返回错误信息: {response.text}")
                 return None
 
-            # 保存图片路径
-            file_name = f"{msg_id}.jpg"
+            # ✅ 新增：根据消息类型确定文件扩展名
+            file_extension = _get_file_extension(message_type)
+            if not file_extension:
+                LOGGER.error(f"不支持的媒体类型: {message_type}")
+                return None
+
+            # ✅ 改动：构建文件名，包含正确的扩展名
+            file_name = f"{msg_id}{file_extension}"
             file_path = os.path.join(TEMP_IMAGE_DIR, file_name)
 
-            # ✅ 改动2: 文件写入是阻塞操作，必须扔到线程池里，否则会卡死整个 Event Loop
-            # 使用 asyncio.to_thread (Python 3.9+) 将同步写入变为异步等待
+            # ✅ 文件写入操作扔到线程池，避免阻塞事件循环
             await asyncio.to_thread(_save_file_sync, file_path, response.content)
 
             # 生成外部可访问的 URL
             public_url = f"{SERVER_BASE_URL}/{TEMP_IMAGE_DIR}/{file_name}"
-            LOGGER.info(f"图片已异步转存: {public_url}")
+            LOGGER.info(f"媒体文件已异步保存: {public_url} (类型: {message_type})")
             return public_url
 
     except Exception as e:
-        LOGGER.error(f"图片异步下载异常: {e}")
+        LOGGER.error(f"媒体文件异步下载异常: {e}")
         return None
+
+def _get_file_extension(message_type: str) -> str:
+    """
+    根据消息类型返回对应的文件扩展名
+
+    Args:
+        message_type: 消息类型
+
+    Returns:
+        str: 文件扩展名（包含点号），不支持的类型返回空字符串
+    """
+    # 支持的媒体类型映射表
+    extension_map = {
+        "image": ".jpg",
+        "video": ".mp4",
+        "voice": ".amr",
+        # 可以根据需要添加更多类型
+        "file": ".bin",  # 通用文件类型
+    }
+
+    # 转小写处理，提高兼容性
+    message_type_lower = message_type.lower().strip()
+
+    extension = extension_map.get(message_type_lower, "")
+
+    if not extension:
+        LOGGER.warning(f"未识别的媒体类型: {message_type}")
+
+    return extension
 
 
 # 辅助同步函数：专门用于在线程池中写入文件
@@ -351,12 +394,18 @@ def _save_file_sync(path: str, content: bytes):
         f.write(content)
 
 
-async def async_handle_image(msg):
+async def async_handle_media(msg, message_type):
     """
     [异步版] 专门在后台任务中处理图片：获取Token -> 下载 -> 调用AI回复
     """
     try:
-        media_id = msg.image.get('media_id')
+        media_id = ""
+        if message_type == "image":
+            media_id = msg.image.get('media_id')
+        if message_type == "video":
+            media_id = msg.video.get('media_id')
+        if message_type == "voice":
+            media_id = msg.voice.get('media_id')
 
         # 1. 获取 Token
         # (Redis读取非常快，毫秒级，这里混用同步函数通常没问题)
@@ -368,25 +417,25 @@ async def async_handle_image(msg):
             return
 
         # 2. ✅ 异步下载图片 (释放 CPU 给其他请求)
-        image_url = await async_download_wechat_image(media_id, msg.msgid, api_access_token)
+        media_url = await async_download_wechat_media(media_id, msg.msgid, api_access_token, message_type)
 
-        if image_url:
-            LOGGER.info(f"下载成功，准备调用回复: {image_url}")
+        if media_url:
+            LOGGER.info(f"下载成功，准备调用回复: {media_url}")
 
             # 3. ✅ 调用异步回复函数 (async_reply_msg 必须已经是 async def)
             # 注意：这里调用的是上一轮修改过的 async_reply_msg
-            # content 参数传入提示语，image_url 传给 AI 进行分析（如果 AI 支持）
+            # content 参数传入提示语，media_url 传给 AI 进行分析（如果 AI 支持）
             await async_reply_msg(
                 msgid=msg.msgid,
                 external_userid=msg.external_userid,
                 open_kfid=msg.open_kfid,
-                content=image_url  # 这里你可以决定是传 URL 还是传 "用户发送了一张图片"
+                content=media_url  # 这里你可以决定是传 URL 还是传 "用户发送了一张图片"
             )
         else:
-            LOGGER.error(f"图片下载失败: {msg.msgid}")
+            LOGGER.error(f"媒体素材下载失败: {msg.msgid}")
 
     except Exception as e:
-        LOGGER.error(f"图片异步处理异常: {e}")
+        LOGGER.error(f"媒体素材异步处理异常: {e}")
 
 
 # ✅ 修改后的异步函数
