@@ -403,6 +403,7 @@ async def async_error_judge_handling(error_code, error_msg, user_id, headers, js
     """
     [异步版] 错误处理与重试逻辑
     """
+    print(f"===================error_code{str(error_code)}error_msg{error_msg}user_id{user_id}headers{str(headers)}json_data{str(json_data)}conversation_id{conversation_id}open_kfid{str(open_kfid)}")
     assistant_reply = ''
     if error_msg:
         # -------------------------------------------------------------
@@ -475,6 +476,7 @@ async def async_error_judge_handling(error_code, error_msg, user_id, headers, js
 
 
 async def async_call_coze_workflow(user_id, conversation_id, questions, open_kfid):
+    print(f"===========================================user_id{str(user_id)}，conversation_id{str(conversation_id)}，questions{str(questions)}，open_kfid{str(open_kfid)}")
     # ✅ 关键点：根据 open_kfid 动态获取配置
     config = get_coze_config(open_kfid)
     """
@@ -489,7 +491,7 @@ async def async_call_coze_workflow(user_id, conversation_id, questions, open_kfi
         'parameters': {
             'user_id': user_id
         },
-        'app_id': config.get('app_id', ''),
+        # 'app_id': config.get('app_id', ''),
         'workflow_id': config.get('workflow_id', ''),
         'conversation_id': conversation_id,
     }
@@ -539,6 +541,7 @@ async def async_call_coze_workflow(user_id, conversation_id, questions, open_kfi
         async with httpx.AsyncClient(timeout=timeout) as client:
             # 使用 stream=True 处理流式响应 (SSE)
             # 注意：API 地址保持不变
+            print(f"===========================================json_data{str(json_data)}，headers{str(headers)}")
             async with client.stream('POST', 'https://api.coze.cn/v1/workflows/chat', headers=headers,
                                      json=json_data) as response:
 
@@ -566,13 +569,14 @@ async def async_call_coze_workflow(user_id, conversation_id, questions, open_kfi
                 assistant_reply = ""
                 error_msg = None
                 error_code = None
-
+                print(f"===================response.aiter_lines{str(response.aiter_lines)}")
                 # ✅ 使用 aiter_lines 异步迭代行
                 async for line in response.aiter_lines():
                     if line.startswith("data:"):
                         data_str = line[5:].strip()
                         try:
                             data_json = json.loads(data_str)
+                            print(f"===================data_json{str(data_json)}")
 
                             # 检查是否为 assistant 回复
                             if data_json.get("role") == "assistant" and "content" in data_json:
@@ -596,6 +600,7 @@ async def async_call_coze_workflow(user_id, conversation_id, questions, open_kfi
                 total_duration = end_time - start_time
                 print(f"⏳ Coze API 响应耗时: {total_duration:.2f}s")
                 # 3. 处理结果
+                print(f"===================assistant_reply{str(assistant_reply)}")
                 if assistant_reply:
                     # ✅ 优化：数据库写入放入线程池，彻底解放 Event Loop
                     try:

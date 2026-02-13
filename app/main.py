@@ -190,13 +190,12 @@ def create_openai_error_response(msg: str):
 async def wechat_hook_verification(
         msg_signature: str, timestamp: str, nonce: str, echostr: str
 ):
+    LOGGER.info(f"Received WeChat token message: {msg_signature}-{timestamp}-{nonce}-{echostr}")
     ret, sEchoStr = check_signature(msg_signature, timestamp, nonce, echostr)
     if ret == 0:
         from fastapi.responses import PlainTextResponse
 
-        return PlainTextResponse(
-            content=sEchoStr, media_type="text/plain;charset=utf-8"
-        )
+        return PlainTextResponse(sEchoStr)
     else:
         return JSONResponse(content={"error": "Verification failed"}, status_code=400)
 
