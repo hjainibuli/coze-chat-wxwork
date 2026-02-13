@@ -40,7 +40,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 LOGGER = logging.getLogger(__name__)
 
 # 上传图片的 URL
-SERVER_BASE_URL = "https://www.docstand.com"
+SERVER_BASE_URL = "http://8.137.108.189"
 TEMP_IMAGE_DIR = "static/images"
 os.makedirs(TEMP_IMAGE_DIR, exist_ok=True)
 
