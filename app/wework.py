@@ -406,6 +406,8 @@ async def async_handle_media(msg, message_type):
             media_id = msg.video.get('media_id')
         if message_type == "voice":
             media_id = msg.voice.get('media_id')
+        if message_type == "file":
+            media_id = msg.file.get('media_id')
 
         # 1. 获取 Token
         # (Redis读取非常快，毫秒级，这里混用同步函数通常没问题)

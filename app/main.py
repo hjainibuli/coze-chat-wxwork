@@ -286,6 +286,16 @@ def process_msg(token: str, cursor: str, background_tasks: BackgroundTasks):
                 # 将 耗时的“获取Token” 和 “下载图片” 都移出主线程
                 # thread_pool.submit(handle_image_msg, msg, token)
                 background_tasks.add_task(async_handle_media, msg, msg_type)
+        elif msg_type == 'file':
+            print(f"======================================media_msg{str(msg)}") # 调试完可以注释掉，避免日志过多
+            # ✅ 优化点：直接判断 msg.image 即可，不需要 hasattr 了
+            if msg.file and msg.file.get('media_id'):
+                media_id = msg.file.get('media_id')
+                LOGGER.info(f"收到文件消息: msgid={msg.msgid}, media_id={media_id}")
+                # ✅ 修改点 2: 不要在这里下载！直接提交给线程池
+                # 将 耗时的“获取Token” 和 “下载图片” 都移出主线程
+                # thread_pool.submit(handle_image_msg, msg, token)
+                background_tasks.add_task(async_handle_media, msg, msg_type)
 
         # ==========================================
         # CASE 3: 其他类型

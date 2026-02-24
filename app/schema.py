@@ -61,6 +61,7 @@ class WechatMsgEntity(BaseModel):
     image: Optional[dict] = Field(None, description="图片消息内容")
     video: Optional[dict] = Field(None, description="视频消息内容")
     voice: Optional[dict] = Field(None, description="语音消息内容")
+    file: Optional[dict] = Field(None, description="文件消息内容")
 
     class Config:
         allow_population_by_field_name = True
