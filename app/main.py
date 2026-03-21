@@ -49,8 +49,8 @@ async def ping():
 @app.post("/personal/wechat/callback")
 async def personal_wechat_callback(request: Request, background_tasks: BackgroundTasks):
     try:
-        LOGGER.info(f"Received personal wechat callback: {request}")
         data = await request.json()
+        LOGGER.info(f"Received personal wechat callback: {data}")
     except Exception:
         return JSONResponse(content={"ok": False, "error": "invalid json"}, status_code=400)
     if not is_tpw_payload_whitelisted(data, TPW_FROM_WXID_WHITELIST):
