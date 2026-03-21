@@ -19,6 +19,7 @@ from wework import check_signature, parse_wechat_message, select_msgs, send_text
 from wework import async_send_text_msg, async_handle_media
 from call_coze_api import get_or_create_latest_conversation, call_coze_workflow, get_or_create_internal_user, \
     async_call_coze_workflow
+from tpw_callback import handle_personal_wechat_payload
 import asyncio
 
 # thread_pool = ThreadPoolExecutor(max_workers=5)  # 创建一个线程池，最大工作线程数为5
@@ -46,10 +47,13 @@ async def ping():
     return {"message": "aaa"}
 
 @app.post("/personal/wechat/callback")
-async def personal_wechat_callback(request: Request):
-    data = await request.json()
-    print(data)
-    return {"message": "aaa"}
+async def personal_wechat_callback(request: Request, background_tasks: BackgroundTasks):
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse(content={"ok": False, "error": "invalid json"}, status_code=400)
+    await handle_personal_wechat_payload(data, background_tasks)
+    return {"ok": True}
 
 
 '''

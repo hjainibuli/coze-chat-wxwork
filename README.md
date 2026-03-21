@@ -241,6 +241,12 @@ docker exec -i coze_mysql mysql -uroot -p"${DB_PASSWORD}"  < app/backup.sql
 * **GET /wechat/hook**: 用于企业微信后台配置时的 URL 验证（校验签名）。
 * **POST /wechat/hook**: 接收用户发送的消息事件。
 
+### 第三方个人微信回调（Gewe 等）
+
+* **POST /personal/wechat/callback**: 接收第三方推送的 JSON 回调；文本消息异步走 Coze（与企微链路共用 `COZE_BOT_CONFIGS` 的 **default** 配置），回复通过 Gewe `postText` 下发。
+* 数据库：执行 [sql/thrid_personal_wechat.sql](sql/thrid_personal_wechat.sql) 创建 `tpw_*` 表；若曾用旧版 `CHAR(36)` 会话 ID，可执行 [sql/tpw_alter_conversation_id_v64.sql](sql/tpw_alter_conversation_id_v64.sql)。
+* 环境变量：`.env` 中配置 `GEWE_API_BASE`、`GEWE_TOKEN`（见 `.env.example`）。
+
 ### Open-WebUI 兼容
 
 * **GET /v1/models**: 获取可用模型列表。

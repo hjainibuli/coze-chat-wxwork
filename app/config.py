@@ -35,6 +35,10 @@ REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "redis")
 
 REDIS_CLIENT = redis.Redis(host=REDISHOST, port=REDISPORT, db=REDIS_DB, password=REDIS_PASSWORD)
 
+# 第三方个人微信 Gewe API（发送文字等）
+GEWE_API_BASE = os.getenv("GEWE_API_BASE", "http://api.geweapi.com").rstrip("/")
+GEWE_TOKEN = os.getenv("GEWE_TOKEN", "").strip()
+
 # 日志配置
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 LOGGER = logging.getLogger(__name__)

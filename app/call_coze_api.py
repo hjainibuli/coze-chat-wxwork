@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 import os
 import asyncio
 import time
+from typing import Callable, Optional
 from database_operation import get_conversations_by_user, create_conversation, create_message, \
     get_conversations_by_user_and_open_kfid, get_user_by_external_id, create_user
 from config import get_coze_config, generate_internal_uid, REDIS_CLIENT, LOGGER
@@ -399,7 +400,18 @@ def call_coze_workflow(user_id, conversation_id, questions):
 '''
 
 
-async def async_error_judge_handling(error_code, error_msg, user_id, headers, json_data, conversation_id, open_kfid):
+async def async_error_judge_handling(
+    error_code,
+    error_msg,
+    user_id,
+    headers,
+    json_data,
+    conversation_id,
+    open_kfid,
+    *,
+    persist_legacy: bool = True,
+    on_coze_conversation_renewed: Optional[Callable[[str], None]] = None,
+):
     """
     [异步版] 错误处理与重试逻辑
     """
@@ -420,13 +432,16 @@ async def async_error_judge_handling(error_code, error_msg, user_id, headers, js
                 new_conversation_id = None
             # new_conversation_id = create_conversation_cozeAPI(user_id)
             if new_conversation_id:
-                # ✅ 优化：数据库写入放入线程池
-                try:
-                    await asyncio.to_thread(insert_new_conversation, user_id, new_conversation_id, open_kfid)
-                except Exception as e:
-                    print(f"❌ 数据库写入异常【insert_new_conversation】: {e}")
-                # insert_new_conversation(user_id, new_conversation_id)
-                # 更新请求体中的 conversation_id
+                if persist_legacy:
+                    try:
+                        await asyncio.to_thread(insert_new_conversation, user_id, new_conversation_id, open_kfid)
+                    except Exception as e:
+                        print(f"❌ 数据库写入异常【insert_new_conversation】: {e}")
+                elif on_coze_conversation_renewed:
+                    try:
+                        await asyncio.to_thread(on_coze_conversation_renewed, new_conversation_id)
+                    except Exception as e:
+                        print(f"❌ on_coze_conversation_renewed 异常: {e}")
                 json_data['conversation_id'] = new_conversation_id
 
                 # 2. 发起二次请求 (异步 httpx)
@@ -475,7 +490,15 @@ async def async_error_judge_handling(error_code, error_msg, user_id, headers, js
         return assistant_reply
 
 
-async def async_call_coze_workflow(user_id, conversation_id, questions, open_kfid):
+async def async_call_coze_workflow(
+    user_id,
+    conversation_id,
+    questions,
+    open_kfid,
+    *,
+    persist_legacy_message: bool = True,
+    on_coze_conversation_renewed: Optional[Callable[[str], None]] = None,
+):
     print(f"===========================================user_id{str(user_id)}，conversation_id{str(conversation_id)}，questions{str(questions)}，open_kfid{str(open_kfid)}")
     # ✅ 关键点：根据 open_kfid 动态获取配置
     config = get_coze_config(open_kfid)
@@ -491,10 +514,12 @@ async def async_call_coze_workflow(user_id, conversation_id, questions, open_kfi
         'parameters': {
             'user_id': user_id
         },
-        # 'app_id': config.get('app_id', ''),
         'workflow_id': config.get('workflow_id', ''),
         'conversation_id': conversation_id,
     }
+    # app_id_val = config.get('app_id', '') or ''
+    # if app_id_val:
+    #     json_data['app_id'] = app_id_val
 
     # --- 构建消息体逻辑 (保持不变) ---
     user_latest_question = None
@@ -602,31 +627,44 @@ async def async_call_coze_workflow(user_id, conversation_id, questions, open_kfi
                 # 3. 处理结果
                 print(f"===================assistant_reply{str(assistant_reply)}")
                 if assistant_reply:
-                    # ✅ 优化：数据库写入放入线程池，彻底解放 Event Loop
-                    try:
-                        await asyncio.to_thread(insert_new_message, user_latest_question, assistant_reply, user_id,
-                                                conversation_id)
-                    except Exception as e:
-                        print(f"❌ 数据库写入异常【insert_new_message】: {e}")  # 记录日志但不影响回复用户
-                    # insert_new_message(user_latest_question, assistant_reply, user_id, conversation_id)
+                    if persist_legacy_message:
+                        try:
+                            await asyncio.to_thread(
+                                insert_new_message,
+                                user_latest_question,
+                                assistant_reply,
+                                user_id,
+                                conversation_id,
+                            )
+                        except Exception as e:
+                            print(f"❌ 数据库写入异常【insert_new_message】: {e}")
                     print("🤖 bot回复：", assistant_reply)
                     return assistant_reply
                 else:
-                    # ⚠️ 注意：如果 error_judge_handling 内部使用了 response.json() 等同步方法，可能会报错
-                    # 这里我们传入了 httpx 的 response 对象，需确保 helper 函数兼容
-                    # 或者我们在这里读取完 body 再传进去
-                    # 简单起见，这里假设 logic 还能复用
                     error_reply = await async_error_judge_handling(
-                        error_code, error_msg, user_id, headers, json_data, conversation_id, open_kfid
+                        error_code,
+                        error_msg,
+                        user_id,
+                        headers,
+                        json_data,
+                        conversation_id,
+                        open_kfid,
+                        persist_legacy=persist_legacy_message,
+                        on_coze_conversation_renewed=on_coze_conversation_renewed,
                     )
-                    if error_reply:
-                        # ✅ 优化：数据库写入放入线程池
+                    if error_reply and persist_legacy_message:
                         try:
-                            await asyncio.to_thread(insert_new_message, user_latest_question, error_reply, user_id,
-                                                    conversation_id)
+                            await asyncio.to_thread(
+                                insert_new_message,
+                                user_latest_question,
+                                error_reply,
+                                user_id,
+                                json_data.get("conversation_id", conversation_id),
+                            )
                         except Exception as e:
                             print(f"❌ 数据库写入异常【insert_new_message】: {e}")
-                        # insert_new_message(user_latest_question, error_reply, user_id, conversation_id)
+                        print("🤖 bot二次请求回复：", error_reply)
+                    elif error_reply:
                         print("🤖 bot二次请求回复：", error_reply)
                     return error_reply
 
