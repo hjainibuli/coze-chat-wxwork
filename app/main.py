@@ -49,6 +49,7 @@ async def ping():
 @app.post("/personal/wechat/callback")
 async def personal_wechat_callback(request: Request, background_tasks: BackgroundTasks):
     try:
+        LOGGER.info(f"Received personal wechat callback: {request}")
         data = await request.json()
     except Exception:
         return JSONResponse(content={"ok": False, "error": "invalid json"}, status_code=400)
