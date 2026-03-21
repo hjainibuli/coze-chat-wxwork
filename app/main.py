@@ -43,7 +43,13 @@ async def root():
 
 @app.get("/ping")
 async def ping():
-    return {"message": "pong"}
+    return {"message": "aaa"}
+
+@app.post("/personal/wechat/callback")
+async def personal_wechat_callback(request: Request):
+    data = await request.json()
+    print(data)
+    return {"message": "aaa"}
 
 
 '''

@@ -78,7 +78,7 @@ services:
     container_name: coze_nginx
     restart: always
     ports:
-      - "80:80"    # 暴露 HTTP
+      - "8952:80"    # 暴露 HTTP
       - "443:443"  # 暴露 HTTPS
     volumes:
       - ./config/nginx:/etc/nginx/conf.d  # 挂载配置文件
