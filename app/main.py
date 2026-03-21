@@ -10,7 +10,7 @@ from starlette.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Generator
 from ai import ai_reply, ai_reply_coze, async_ai_reply_coze
-from config import LOGGER, WEWORK_CORPID, WEWORK_ENCODING_AES_KEY, WEWORK_TOKEN
+from config import LOGGER, WEWORK_CORPID, WEWORK_ENCODING_AES_KEY, WEWORK_TOKEN, TPW_FROM_WXID_WHITELIST
 from kv import get_cursor, get_msg_retry, set_msg_retry
 from schema import WeChatMessage, WeChatTokenMessage, WechatMsgEntity, WechatMsgSendEntity
 from util.wx_biz_json_msg_crypt import WXBizJsonMsgCrypt
@@ -19,7 +19,7 @@ from wework import check_signature, parse_wechat_message, select_msgs, send_text
 from wework import async_send_text_msg, async_handle_media
 from call_coze_api import get_or_create_latest_conversation, call_coze_workflow, get_or_create_internal_user, \
     async_call_coze_workflow
-from tpw_callback import handle_personal_wechat_payload
+from tpw_callback import handle_personal_wechat_payload, is_tpw_payload_whitelisted
 import asyncio
 
 # thread_pool = ThreadPoolExecutor(max_workers=5)  # 创建一个线程池，最大工作线程数为5
@@ -52,6 +52,8 @@ async def personal_wechat_callback(request: Request, background_tasks: Backgroun
         data = await request.json()
     except Exception:
         return JSONResponse(content={"ok": False, "error": "invalid json"}, status_code=400)
+    if not is_tpw_payload_whitelisted(data, TPW_FROM_WXID_WHITELIST):
+        return {"ok": True, "ignored": True}
     await handle_personal_wechat_payload(data, background_tasks)
     return {"ok": True}
 

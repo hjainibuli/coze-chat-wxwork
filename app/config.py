@@ -39,15 +39,23 @@ REDIS_CLIENT = redis.Redis(host=REDISHOST, port=REDISPORT, db=REDIS_DB, password
 GEWE_API_BASE = os.getenv("GEWE_API_BASE", "http://api.geweapi.com").rstrip("/")
 GEWE_TOKEN = os.getenv("GEWE_TOKEN", "").strip()
 
+# 个人微信回调：仅处理来自这些 wxid 的 AddMsg（逗号分隔）；留空则不限制
+def _parse_wxid_whitelist(raw: str) -> frozenset[str]:
+    if not raw or not str(raw).strip():
+        return frozenset()
+    return frozenset(x.strip() for x in str(raw).split(",") if x.strip())
+
+
+TPW_FROM_WXID_WHITELIST = _parse_wxid_whitelist(os.getenv("TPW_FROM_WXID_WHITELIST", ""))
+
 # 日志配置
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 LOGGER = logging.getLogger(__name__)
 
 # 上传图片的 URL
-SERVER_BASE_URL = "http://8.137.108.189"
+SERVER_BASE_URL = os.getenv("SERVER_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 TEMP_IMAGE_DIR = "static/images"
 os.makedirs(TEMP_IMAGE_DIR, exist_ok=True)
-
 
 # 构造内部用户ID
 def generate_internal_uid(prefix="user"):
