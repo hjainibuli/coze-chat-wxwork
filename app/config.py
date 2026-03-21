@@ -53,9 +53,11 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 LOGGER = logging.getLogger(__name__)
 
 # 上传图片的 URL
-SERVER_BASE_URL = os.getenv("SERVER_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+SERVER_BASE_URL = os.getenv("SERVER_BASE_URL", "http://8.137.108.189:8952").rstrip("/")
 TEMP_IMAGE_DIR = "static/images"
+TEMP_VOICE_DIR = "static/voices"
 os.makedirs(TEMP_IMAGE_DIR, exist_ok=True)
+os.makedirs(TEMP_VOICE_DIR, exist_ok=True)
 
 # 构造内部用户ID
 def generate_internal_uid(prefix="user"):

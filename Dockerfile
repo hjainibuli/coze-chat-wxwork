@@ -17,8 +17,14 @@ RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && echo 'Asia/Shangh
 # 1. 先复制依赖文件 (利用 Docker 缓存层加速构建)
 COPY app/requirements.txt .
 
-# 2. 安装依赖 (使用清华源加速)
-RUN pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+# 2. ffmpeg：WAV→MP3；build-essential：pilk 在 arm64 等常无 wheel 需 gcc 编译；pip 装完后卸掉编译链减小体积
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    build-essential \
+    && pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    && apt-get purge -y build-essential \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
 
 # 3. 复制所有业务代码
 COPY app/ .
