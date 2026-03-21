@@ -47,7 +47,8 @@ def check_signature(msg_signature, timestamp, nonce, echostr):
     return ret, sEchoStr
 
 
-def select_msgs(cursor: str, token: str) -> List[WechatMsgEntity]:
+def select_msgs(cursor: str, token: str, open_kfid: str) -> List[WechatMsgEntity]:
+    LOGGER.info(f"select_msgs: cursor={cursor}, token={token}")
     resp = requests.post(
         "https://qyapi.weixin.qq.com/cgi-bin/kf/sync_msg",
         params={
@@ -56,10 +57,12 @@ def select_msgs(cursor: str, token: str) -> List[WechatMsgEntity]:
         data=json.dumps(
             {
                 "limit": 1000,
-                "token": token
+                "token": token,
+                "open_kfid": open_kfid
             }
         )
     )
+    LOGGER.info(f"select_msgs: resp={resp.text}")
     resp_data = resp.json()
     msgs = resp_data.get("msg_list", [])
     has_more = resp_data.get("has_more", 0)

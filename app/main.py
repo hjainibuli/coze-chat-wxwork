@@ -218,12 +218,12 @@ async def wechat_hook_event(
     LOGGER.info(f"Received WeChat token message: {token_msg.model_dump_json()}")
     cursor = get_cursor()
     # ✅ 传递 background_tasks 进去
-    process_msg(token_msg.Token, cursor, background_tasks)
+    process_msg(token_msg.Token, cursor, background_tasks, token_msg.OpenKfId)
     return JSONResponse(content={"message": "Event received"})
 
 
-def process_msg(token: str, cursor: str, background_tasks: BackgroundTasks):
-    msg_entities, has_more, next_cursor = select_msgs(cursor=cursor, token=token)
+def process_msg(token: str, cursor: str, background_tasks: BackgroundTasks, open_kfid: str):
+    msg_entities, has_more, next_cursor = select_msgs(cursor=cursor, token=token, open_kfid=open_kfid)
     last_5 = msg_entities[-5:] if len(msg_entities) >= 5 else msg_entities
     for msg in last_5:
         # ---------------------------------------------------------
