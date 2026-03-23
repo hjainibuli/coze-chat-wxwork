@@ -70,6 +70,16 @@ def _tpw_img_urls_from_html(html: str) -> List[str]:
     return out
 
 
+def _normalize_coze_message_newlines(s: str) -> str:
+    """
+    Coze 有时把换行以「反斜杠 + 字母 n」两个字面字符放进 message_list（双重转义），
+    json.loads 后仍不是真正的换行；_tpw_coze_reply_chunks 按换行切条前需先还原。
+    """
+    if not s:
+        return s
+    return s.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\r", "\n")
+
+
 def _parse_coze_workflow_json_reply(raw: Any) -> Tuple[str, List[str]]:
     """
     Coze 返回 JSON 字符串或 dict。reply 为文本；fileInfos 支持两种形式::
@@ -100,6 +110,7 @@ def _parse_coze_workflow_json_reply(raw: Any) -> Tuple[str, List[str]]:
 
     reply = obj.get("message_list")
     reply_text = str(reply).strip() if reply is not None else ""
+    reply_text = _normalize_coze_message_newlines(reply_text)
 
     urls: List[str] = []
     fi = obj.get("fileInfos")
