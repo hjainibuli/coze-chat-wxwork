@@ -218,3 +218,25 @@ async def post_text(*, app_id: str, to_wxid: str, content: str, ats: Optional[st
         if resp.status_code != 200:
             LOGGER.warning("Gewe HTTP %s: %s", resp.status_code, data)
         return data
+
+
+async def post_image(*, app_id: str, to_wxid: str, img_url: str) -> Dict[str, Any]:
+    """postImage：通过图片 URL 发送；返回含 ret/msg/data，失败时 ret != 200 或抛 httpx 异常。"""
+    if not GEWE_TOKEN:
+        LOGGER.error("GEWE_TOKEN 未配置，无法发图片")
+        return {"ret": -1, "msg": "GEWE_TOKEN missing", "data": {}}
+
+    url = f"{GEWE_API_BASE}/gewe/v2/api/message/postImage"
+    body: Dict[str, Any] = {"appId": app_id, "toWxid": to_wxid, "imgUrl": img_url}
+    headers = {"X-GEWE-TOKEN": GEWE_TOKEN, "Content-Type": "application/json"}
+    timeout = httpx.Timeout(60.0, connect=10.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(url, json=body, headers=headers)
+        try:
+            data = resp.json()
+        except Exception:
+            LOGGER.error("Gewe postImage 响应非 JSON: %s", resp.text[:500])
+            return {"ret": -1, "msg": resp.text[:200], "data": {}}
+        if resp.status_code != 200:
+            LOGGER.warning("Gewe postImage HTTP %s: %s", resp.status_code, data)
+        return data

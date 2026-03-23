@@ -5,7 +5,9 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, Optional
+import json
+import re
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import BackgroundTasks
 
@@ -18,6 +20,7 @@ from gewe_client import (
     download_image_temp_url_try_types,
     download_video_temp_url,
     download_voice_temp_url,
+    post_image,
     post_text,
 )
 from tpw_db import (
@@ -37,6 +40,104 @@ from tpw_xml import (
     parse_emoji_md5,
     wrap_xml_if_needed,
 )
+
+# Coze 回复拆成多条 Gewe 文本时的分隔符（后续若改用自定义标记，只改此处）
+COZE_REPLY_MULTIMESSAGE_SPLIT = "\n"
+
+
+def _tpw_coze_reply_chunks(reply: Any) -> list[str]:
+    """将 Coze 回复按 COZE_REPLY_MULTIMESSAGE_SPLIT 拆成待发送片段；整体为空则返回 []."""
+    if reply is None:
+        return []
+    s = str(reply).strip()
+    if not s:
+        return []
+    return [p.strip() for p in s.split(COZE_REPLY_MULTIMESSAGE_SPLIT) if p.strip()]
+
+
+_IMG_SRC_RE = re.compile(r"""<img[^>]+src\s*=\s*(["'])(.*?)\1""", re.IGNORECASE | re.DOTALL)
+
+
+def _tpw_img_urls_from_html(html: str) -> List[str]:
+    """从 HTML 片段中提取 <img src="..."> 的 URL（支持双引号或单引号）。"""
+    if not html or not html.strip():
+        return []
+    out: List[str] = []
+    for m in _IMG_SRC_RE.finditer(html):
+        u = (m.group(2) or "").strip()
+        if u:
+            out.append(u)
+    return out
+
+
+def _parse_coze_workflow_json_reply(raw: Any) -> Tuple[str, List[str]]:
+    """
+    Coze 返回 JSON 字符串或 dict。reply 为文本；fileInfos 支持两种形式::
+
+        1) 原生数组::
+            "fileInfos": [{"documentId":"...", "output":"<img src=\\"https://...\\"> ..."}]
+
+        2) 数组再序列化成字符串（当前 Coze 常见）::
+            "fileInfos": "[{\\"documentId\\":\\"...\\",\\"output\\":\\"<img src=\\\\\\"https://...\\\\\\"> ...\\"}]"
+
+    每项 output 中用 <img src="..."> / src='...' 抽取图片 URL。
+    无法解析为最外层 JSON 时，整段视为旧版纯文本 reply。
+    """
+    if raw is None:
+        return "", []
+    if isinstance(raw, dict):
+        obj = raw
+    else:
+        s = str(raw).strip()
+        if not s:
+            return "", []
+        try:
+            obj = json.loads(s)
+        except json.JSONDecodeError:
+            return s, []
+        if not isinstance(obj, dict):
+            return str(raw).strip(), []
+
+    reply = obj.get("message_list")
+    reply_text = str(reply).strip() if reply is not None else ""
+
+    urls: List[str] = []
+    fi = obj.get("fileInfos")
+    items: Optional[List[Any]] = None
+    if fi is None:
+        pass
+    elif isinstance(fi, list):
+        items = fi
+    elif isinstance(fi, str) and fi.strip():
+        try:
+            parsed = json.loads(fi)
+            if isinstance(parsed, list):
+                items = parsed
+            else:
+                LOGGER.warning("tpw Coze fileInfos 字符串 json.loads 后非数组，已忽略附件")
+        except json.JSONDecodeError:
+            LOGGER.warning("tpw Coze fileInfos 字符串无法解析为 JSON 数组，已忽略附件")
+    else:
+        LOGGER.warning(
+            "tpw Coze fileInfos 类型不支持（应为数组或 JSON 数组字符串），type=%s，已忽略附件",
+            type(fi).__name__,
+        )
+
+    if items:
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            out = it.get("output")
+            if out is not None:
+                urls.extend(_tpw_img_urls_from_html(str(out)))
+
+    seen: set[str] = set()
+    uniq: List[str] = []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            uniq.append(u)
+    return reply_text, uniq
 
 
 def _nested_string(blob: Any, key: str) -> str:
@@ -258,6 +359,72 @@ def _tpw_sync_ingest(data: Dict[str, Any]) -> Dict[str, Any]:
     return {"action": "queue", "task": base_task}
 
 
+async def _post_text_with_retry(
+    *, app_id: str, to_wxid: str, content: str, message_id: Any
+) -> Dict[str, Any]:
+    """Gewe postText：网络异常或 ret!=200 时指数退避重试，返回最后一次响应。"""
+    max_attempts = 3
+    base_delay_s = 0.8
+    last: Dict[str, Any] = {}
+    for attempt in range(max_attempts):
+        try:
+            last = await post_text(app_id=app_id, to_wxid=to_wxid, content=content)
+            if last.get("ret") == 200:
+                return last
+            LOGGER.warning(
+                "tpw Gewe postText 未成功将重试 message_id=%s attempt=%s/%s ret=%s body=%s",
+                message_id,
+                attempt + 1,
+                max_attempts,
+                last.get("ret"),
+                last,
+            )
+        except Exception as e:
+            LOGGER.warning(
+                "tpw Gewe postText 异常将重试 message_id=%s attempt=%s/%s: %s",
+                message_id,
+                attempt + 1,
+                max_attempts,
+                e,
+            )
+        if attempt + 1 < max_attempts:
+            await asyncio.sleep(base_delay_s * (2**attempt))
+    return last
+
+
+async def _post_image_with_retry(
+    *, app_id: str, to_wxid: str, img_url: str, message_id: Any
+) -> Dict[str, Any]:
+    """Gewe postImage：网络异常或 ret!=200 时指数退避重试。"""
+    max_attempts = 3
+    base_delay_s = 0.8
+    last: Dict[str, Any] = {}
+    for attempt in range(max_attempts):
+        try:
+            last = await post_image(app_id=app_id, to_wxid=to_wxid, img_url=img_url)
+            if last.get("ret") == 200:
+                return last
+            LOGGER.warning(
+                "tpw Gewe postImage 未成功将重试 message_id=%s attempt=%s/%s ret=%s body=%s",
+                message_id,
+                attempt + 1,
+                max_attempts,
+                last.get("ret"),
+                last,
+            )
+        except Exception as e:
+            LOGGER.warning(
+                "tpw Gewe postImage 异常将重试 message_id=%s attempt=%s/%s: %s",
+                message_id,
+                attempt + 1,
+                max_attempts,
+                e,
+            )
+        if attempt + 1 < max_attempts:
+            await asyncio.sleep(base_delay_s * (2**attempt))
+    return last
+
+
 async def _resolve_gewe_temp_url(task: Dict[str, Any]) -> Optional[str]:
     app_id = task["appid"]
     kind = task["media_kind"]
@@ -319,20 +486,54 @@ async def _tpw_pipeline_async(task: Dict[str, Any]) -> None:
         update_chat_message_status(msg_row_id, "failed")
         return
 
-    if not reply or not str(reply).strip():
-        reply = "抱歉，暂时无法回复。"
+    reply_text, image_urls = _parse_coze_workflow_json_reply(reply)
+    chunks = _tpw_coze_reply_chunks(reply_text)
+    if not chunks and not image_urls:
+        LOGGER.info("tpw Coze 回复无文本且无图片，跳过 Gewe 发送 message_id=%s", msg_row_id)
+        update_chat_message_status(msg_row_id, "failed")
+        return
 
-    try:
-        r = await post_text(app_id=task["appid"], to_wxid=task["peer_wxid"], content=str(reply).strip())
+    for idx, chunk in enumerate(chunks):
+        r = await _post_text_with_retry(
+            app_id=task["appid"],
+            to_wxid=task["peer_wxid"],
+            content=chunk,
+            message_id=msg_row_id,
+        )
         ret = r.get("ret")
         if ret != 200:
-            LOGGER.warning("tpw Gewe 发送未成功 message_id=%s ret=%s body=%s", msg_row_id, ret, r)
+            LOGGER.warning(
+                "tpw Gewe 文本发送未成功 message_id=%s part=%s/%s ret=%s body=%s",
+                msg_row_id,
+                idx + 1,
+                len(chunks),
+                ret,
+                r,
+            )
             update_chat_message_status(msg_row_id, "failed")
-        else:
-            update_chat_message_status(msg_row_id, "coze_done")
-    except Exception:
-        LOGGER.exception("tpw Gewe 发送异常 message_id=%s", msg_row_id)
-        update_chat_message_status(msg_row_id, "failed")
+            return
+
+    for idx, img_url in enumerate(image_urls):
+        r = await _post_image_with_retry(
+            app_id=task["appid"],
+            to_wxid=task["peer_wxid"],
+            img_url=img_url,
+            message_id=msg_row_id,
+        )
+        ret = r.get("ret")
+        if ret != 200:
+            LOGGER.warning(
+                "tpw Gewe 图片发送未成功 message_id=%s img=%s/%s ret=%s body=%s",
+                msg_row_id,
+                idx + 1,
+                len(image_urls),
+                ret,
+                r,
+            )
+            update_chat_message_status(msg_row_id, "failed")
+            return
+
+    update_chat_message_status(msg_row_id, "coze_done")
 
 
 def is_tpw_payload_whitelisted(data: Dict[str, Any], allowed: frozenset[str]) -> bool:
