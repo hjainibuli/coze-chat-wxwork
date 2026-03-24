@@ -45,6 +45,16 @@ from tpw_xml import (
 COZE_REPLY_MULTIMESSAGE_SPLIT = "\n"
 
 
+def _tpw_wechat_nick_from_push_content(push: Any) -> str:
+    """Data.PushContent 按英文分号分隔，trim 后取第一段（见 docs/回调消息详解.md）。"""
+    if push is None:
+        return ""
+    s = str(push).strip()
+    if not s:
+        return ""
+    return s.split(";", 1)[0].strip()
+
+
 def _tpw_coze_reply_chunks(reply: Any) -> list[str]:
     """将 Coze 回复按 COZE_REPLY_MULTIMESSAGE_SPLIT 拆成待发送片段；整体为空则返回 []."""
     if reply is None:
@@ -359,6 +369,8 @@ def _tpw_sync_ingest(data: Dict[str, Any]) -> Dict[str, Any]:
         "coze_conversation_id": coze_conversation_id,
         "end_user_id": end_user_id,
         "device_account_id": device_account_id,
+        "wechat_id": from_wxid,
+        "wechat_nick_name": _tpw_wechat_nick_from_push_content(d.get("PushContent")),
     }
 
     if media_task:
@@ -491,6 +503,8 @@ async def _tpw_pipeline_async(task: Dict[str, Any]) -> None:
             None,
             persist_legacy_message=False,
             on_coze_conversation_renewed=on_renew,
+            wechat_id=task.get("wechat_id"),
+            wechat_nick_name=task.get("wechat_nick_name"),
         )
     except Exception:
         LOGGER.exception("tpw Coze 调用异常 message_id=%s", msg_row_id)

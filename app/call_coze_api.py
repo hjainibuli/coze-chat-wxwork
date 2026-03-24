@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 import os
 import asyncio
 import time
-from typing import Callable, Optional
+from typing import Any, Callable, Dict, Optional
 from database_operation import get_conversations_by_user, create_conversation, create_message, \
     get_conversations_by_user_and_open_kfid, get_user_by_external_id, create_user
 from config import get_coze_config, generate_internal_uid, REDIS_CLIENT, LOGGER
@@ -498,6 +498,8 @@ async def async_call_coze_workflow(
     *,
     persist_legacy_message: bool = True,
     on_coze_conversation_renewed: Optional[Callable[[str], None]] = None,
+    wechat_id: Optional[str] = None,
+    wechat_nick_name: Optional[str] = None,
 ):
     print(f"===========================================user_id{str(user_id)}，conversation_id{str(conversation_id)}，questions{str(questions)}，open_kfid{str(open_kfid)}")
     # ✅ 关键点：根据 open_kfid 动态获取配置
@@ -509,11 +511,14 @@ async def async_call_coze_workflow(
         'Authorization': config.get('token', ''),
         'Content-Type': 'application/json',
     }
+    parameters: Dict[str, Any] = {'user_id': user_id}
+    if wechat_id is not None:
+        parameters['wechat_id'] = wechat_id
+    if wechat_nick_name is not None:
+        parameters['wechat_nick_name'] = wechat_nick_name
     json_data = {
         'additional_messages': [],
-        'parameters': {
-            'user_id': user_id
-        },
+        'parameters': parameters,
         'workflow_id': config.get('workflow_id', ''),
         'conversation_id': conversation_id,
     }
