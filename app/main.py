@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from starlette.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, List, Generator
+from typing import Optional, List, Generator, Union
 from ai import ai_reply, ai_reply_coze, async_ai_reply_coze
 from config import LOGGER, WEWORK_CORPID, WEWORK_ENCODING_AES_KEY, WEWORK_TOKEN, TPW_FROM_WXID_WHITELIST, TPW_SCHEDULED_WAKE_SECRET
 from kv import get_cursor, get_msg_retry, set_msg_retry
@@ -51,6 +51,49 @@ class TpwScheduledWakeRequest(BaseModel):
     trigger_type: str = "user"
 
 
+async def _tpw_scheduled_wake_like(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    body: TpwScheduledWakeRequest,
+    *,
+    log_label: str,
+) -> Union[JSONResponse, dict]:
+    """
+    与定时唤醒相同：构造 synthetic AddMsg → Coze → Gewe；鉴权与 whitelist 规则相同。
+    """
+    hdr = (request.headers.get("X-TPW-Scheduled-Wake-Secret") or "").strip()
+    if TPW_SCHEDULED_WAKE_SECRET:
+        if hdr != TPW_SCHEDULED_WAKE_SECRET:
+            return JSONResponse(content={"ok": False, "error": "unauthorized"}, status_code=401)
+        bypass_whitelist = True
+    else:
+        bypass_whitelist = False
+
+    data = build_tpw_scheduled_wake_addmsg_payload(
+        appid=body.Appid,
+        wxid=body.Wxid,
+        from_user_name=body.FromUserName,
+        to_user_name=body.ToUserName,
+        content=body.Content,
+        push_content=body.PushContent,
+        push_display_name=body.PushDisplayName,
+        msg_source=body.MsgSource,
+    )
+    LOGGER.info(
+        "%s synthetic AddMsg: Appid=%s Wxid=%s FromUserName=%s",
+        log_label,
+        body.Appid,
+        body.Wxid,
+        body.FromUserName,
+    )
+
+    if not bypass_whitelist and not is_tpw_payload_whitelisted(data, TPW_FROM_WXID_WHITELIST):
+        return {"ok": True, "ignored": True}
+
+    await handle_personal_wechat_payload(data, background_tasks, trigger_type=body.trigger_type)
+    return {"ok": True}
+
+
 # 挂载静态目录
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -88,36 +131,21 @@ async def personal_wechat_scheduled_wake(
     入参与真实回调一致字段：Appid、Wxid、FromUserName（对方 wxid）、ToUserName（本机 wxid，通常与 Wxid 相同）。
     若配置 TPW_SCHEDULED_WAKE_SECRET，须在请求头携带 X-TPW-Scheduled-Wake-Secret，且校验通过时不再受 TPW_FROM_WXID_WHITELIST 限制。
     """
-    hdr = (request.headers.get("X-TPW-Scheduled-Wake-Secret") or "").strip()
-    if TPW_SCHEDULED_WAKE_SECRET:
-        if hdr != TPW_SCHEDULED_WAKE_SECRET:
-            return JSONResponse(content={"ok": False, "error": "unauthorized"}, status_code=401)
-        bypass_whitelist = True
-    else:
-        bypass_whitelist = False
-
-    data = build_tpw_scheduled_wake_addmsg_payload(
-        appid=body.Appid,
-        wxid=body.Wxid,
-        from_user_name=body.FromUserName,
-        to_user_name=body.ToUserName,
-        content=body.Content,
-        push_content=body.PushContent,
-        push_display_name=body.PushDisplayName,
-        msg_source=body.MsgSource,
-    )
-    LOGGER.info(
-        "scheduled-wake synthetic AddMsg: Appid=%s Wxid=%s FromUserName=%s",
-        body.Appid,
-        body.Wxid,
-        body.FromUserName,
+    return await _tpw_scheduled_wake_like(
+        request, background_tasks, body, log_label="scheduled-wake"
     )
 
-    if not bypass_whitelist and not is_tpw_payload_whitelisted(data, TPW_FROM_WXID_WHITELIST):
-        return {"ok": True, "ignored": True}
 
-    await handle_personal_wechat_payload(data, background_tasks, trigger_type=body.trigger_type)
-    return {"ok": True}
+@app.post("/personal/wechat/heartbeat")
+async def personal_wechat_heartbeat(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    body: TpwScheduledWakeRequest,
+):
+    """
+    心跳：入参、鉴权与白名单行为与 /personal/wechat/scheduled-wake 完全一致，便于单独配置 cron 或监控探测。
+    """
+    return await _tpw_scheduled_wake_like(request, background_tasks, body, log_label="heartbeat")
 
 
 '''

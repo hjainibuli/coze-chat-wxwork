@@ -3,6 +3,7 @@
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from sqlalchemy import (
@@ -151,6 +152,28 @@ class TpwMessageMedia(Base):
     byte_length = Column(Integer, nullable=True)
     blob_data = Column(LONGBLOB, nullable=True)
     object_url = Column(String(1024), nullable=True)
+    created_at = Column(DateTime, server_default=func.current_timestamp())
+
+
+class TpwCozeReplyMessage(Base):
+    """Coze 经 Gewe 发出的回复落库：会话、收发 wxid、发送时间。"""
+
+    __tablename__ = "tpw_coze_reply_message"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    conversation_id = Column(
+        String(64),
+        nullable=False,
+    )
+    sender_wechat_id = Column(String(128), nullable=False)
+    receiver_wechat_id = Column(String(128), nullable=False)
+    sent_at = Column(DateTime, nullable=False)
+    trigger_chat_message_id = Column(
+        BigInteger, nullable=True
+    )
+    kind = Column(String(16), nullable=False, server_default="text")
+    body_text = Column(MEDIUMTEXT, nullable=True)
+    image_url = Column(String(2048), nullable=True)
     created_at = Column(DateTime, server_default=func.current_timestamp())
 
 
@@ -379,6 +402,56 @@ def update_chat_message_status(message_id: int, status: str) -> None:
             {TpwChatMessage.ingest_status: status}
         )
         session.commit()
+    finally:
+        session.close()
+
+
+def insert_tpw_coze_reply_message(
+    *,
+    conversation_id: str,
+    sender_wechat_id: str,
+    receiver_wechat_id: str,
+    sent_at: Optional[datetime] = None,
+    trigger_chat_message_id: Optional[int] = None,
+    kind: str = "text",
+    body_text: Optional[str] = None,
+    image_url: Optional[str] = None,
+) -> int:
+    """记录一条已发出的 Coze 回复（文本块或图片）。"""
+    session = SessionLocal()
+    try:
+        row = TpwCozeReplyMessage(
+            conversation_id=conversation_id,
+            sender_wechat_id=sender_wechat_id,
+            receiver_wechat_id=receiver_wechat_id,
+            sent_at=sent_at or datetime.now().replace(tzinfo=None),
+            trigger_chat_message_id=trigger_chat_message_id,
+            kind=kind[:16],
+            body_text=body_text,
+            image_url=image_url,
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return int(row.id)
+    finally:
+        session.close()
+
+
+def get_latest_tpw_coze_reply_sent_at(conversation_id: str) -> Optional[datetime]:
+    """按 conversation_id 取 tpw_coze_reply_message 中 sent_at 最新一条；无记录返回 None。"""
+    if not conversation_id or not str(conversation_id).strip():
+        return None
+    cid = str(conversation_id).strip()
+    session = SessionLocal()
+    try:
+        row = (
+            session.query(TpwCozeReplyMessage)
+            .filter(TpwCozeReplyMessage.conversation_id == cid)
+            .order_by(TpwCozeReplyMessage.sent_at.desc())
+            .first()
+        )
+        return row.sent_at if row else None
     finally:
         session.close()
 

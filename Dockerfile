@@ -6,22 +6,23 @@ FROM python:3.10-slim
 # PYTHONDONTWRITEBYTECODE=1: 防止生成 .pyc 文件，减小体积
 # PYTHONUNBUFFERED=1: 强制实时输出日志，防止 Docker logs 丢失或延迟
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    TZ=Asia/Shanghai
 
 # 设置工作目录
 WORKDIR /app
 
-# 设置时区为上海 (解决日志时间问题)
-RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && echo 'Asia/Shanghai' > /etc/timezone
-
 # 1. 先复制依赖文件 (利用 Docker 缓存层加速构建)
 COPY app/requirements.txt .
 
-# 2. ffmpeg：WAV→MP3；build-essential：pilk 在 arm64 等常无 wheel 需 gcc 编译；pip 装完后卸掉编译链减小体积
+# 2. tzdata：时区数据；ffmpeg：WAV→MP3；build-essential：pilk 在 arm64 等常无 wheel 需 gcc 编译
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    tzdata \
     ffmpeg \
     build-essential \
     && pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    && ln -snf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
+    && echo Asia/Shanghai > /etc/timezone \
     && apt-get purge -y build-essential \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*

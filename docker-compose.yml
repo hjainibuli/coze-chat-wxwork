@@ -8,6 +8,8 @@ services:
     build: .
     container_name: coze_backend
     restart: always
+    environment:
+      TZ: Asia/Shanghai
     volumes:
       - ./app:/app             # 代码挂载 (方便热修复，生产环境可去掉)
       - ./logs:/app/logs       # 日志挂载
@@ -37,13 +39,15 @@ services:
     ports:
       - "3308:3306"
     environment:
+      TZ: Asia/Shanghai
       MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
       MYSQL_DATABASE: ${DB_NAME}
     command:
       # 必须开启 utf8mb4 支持 Emoji 和中文
-      --character-set-server=utf8mb4 
-      --collation-server=utf8mb4_unicode_ci 
-      --default-authentication-plugin=mysql_native_password
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+      - "--default-time-zone=+08:00"
     volumes:
       - ./data/mysql:/var/lib/mysql # 数据持久化
     healthcheck:
@@ -61,6 +65,8 @@ services:
     image: redis:7-alpine
     container_name: coze_redis
     restart: always
+    environment:
+      TZ: Asia/Shanghai
     command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes
     volumes:
       - ./data/redis:/data
@@ -79,6 +85,8 @@ services:
     image: nginx:alpine
     container_name: coze_nginx
     restart: always
+    environment:
+      TZ: Asia/Shanghai
     ports:
       - "8952:80"    # 暴露 HTTP
       - "443:443"  # 暴露 HTTPS

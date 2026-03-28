@@ -29,6 +29,7 @@ from tpw_db import (
     get_or_create_device_account,
     get_or_create_end_user,
     get_or_create_tpw_conversation,
+    insert_tpw_coze_reply_message,
     renew_tpw_coze_conversation_id,
     save_callback_raw,
     try_insert_chat_message,
@@ -465,6 +466,7 @@ def _tpw_sync_ingest(data: Dict[str, Any]) -> Dict[str, Any]:
     base_task = {
         "message_id": chat_row_id,
         "appid": appid,
+        "owner_wxid": owner_wxid,
         "peer_wxid": from_wxid,
         "internal_user_id": internal_user_id,
         "coze_conversation_id": coze_conversation_id,
@@ -472,7 +474,7 @@ def _tpw_sync_ingest(data: Dict[str, Any]) -> Dict[str, Any]:
         "device_account_id": device_account_id,
         "wechat_id": from_wxid,
         "wechat_nick_name": _tpw_wechat_nick_from_push_content(d.get("PushContent")),
-        "to_wxid": to_wxid
+        "to_wxid": to_wxid,
     }
 
     if media_task:
@@ -577,6 +579,42 @@ async def _resolve_gewe_temp_url(task: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+async def _tpw_record_coze_reply_sent(
+    task: Dict[str, Any],
+    *,
+    msg_row_id: int,
+    kind: str,
+    body_text: Optional[str] = None,
+    image_url: Optional[str] = None,
+) -> None:
+    """Coze 回复经 Gewe 发送成功后写入 tpw_coze_reply_message。"""
+    try:
+        sender = (task.get("owner_wxid") or task.get("to_wxid") or "").strip()
+        receiver = (task.get("peer_wxid") or "").strip()
+        if not sender or not receiver:
+            LOGGER.warning(
+                "tpw 跳过 Coze 回复落库：缺少 sender/receiver message_id=%s owner=%s peer=%s",
+                msg_row_id,
+                task.get("owner_wxid"),
+                task.get("peer_wxid"),
+            )
+            return
+        await asyncio.to_thread(
+            insert_tpw_coze_reply_message,
+            **{
+                "conversation_id": task["coze_conversation_id"],
+                "sender_wechat_id": sender,
+                "receiver_wechat_id": receiver,
+                "trigger_chat_message_id": msg_row_id,
+                "kind": kind,
+                "body_text": body_text,
+                "image_url": image_url,
+            },
+        )
+    except Exception:
+        LOGGER.exception("tpw Coze 回复落库失败 message_id=%s kind=%s", msg_row_id, kind)
+
+
 async def _tpw_pipeline_async(task: Dict[str, Any]) -> None:
     msg_row_id = task["message_id"]
 
@@ -642,6 +680,9 @@ async def _tpw_pipeline_async(task: Dict[str, Any]) -> None:
             )
             update_chat_message_status(msg_row_id, "failed")
             return
+        await _tpw_record_coze_reply_sent(
+            task, msg_row_id=msg_row_id, kind="text", body_text=chunk
+        )
 
     for idx, img_url in enumerate(image_urls):
         r = await _post_image_with_retry(
@@ -662,6 +703,9 @@ async def _tpw_pipeline_async(task: Dict[str, Any]) -> None:
             )
             update_chat_message_status(msg_row_id, "failed")
             return
+        await _tpw_record_coze_reply_sent(
+            task, msg_row_id=msg_row_id, kind="image", image_url=img_url
+        )
 
     update_chat_message_status(msg_row_id, "coze_done")
 

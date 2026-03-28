@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, Optional
 from database_operation import get_conversations_by_user, create_conversation, create_message, \
     get_conversations_by_user_and_open_kfid, get_user_by_external_id, create_user
 from config import get_coze_config, generate_internal_uid, REDIS_CLIENT, LOGGER
+from tpw_db import get_latest_tpw_coze_reply_sent_at
 
 
 def init_config():
@@ -525,6 +526,19 @@ async def async_call_coze_workflow(
         parameters['wechat_id'] = wechat_id
     if wechat_nick_name is not None:
         parameters['wechat_nick_name'] = wechat_nick_name
+    if conversation_id:
+        try:
+            latest_sent = await asyncio.to_thread(
+                get_latest_tpw_coze_reply_sent_at, str(conversation_id)
+            )
+            if latest_sent is not None:
+                parameters["recent_message_time"] = latest_sent.isoformat(timespec="seconds")
+        except Exception as e:
+            LOGGER.warning(
+                "recent_message_time 查询失败 conversation_id=%s: %s",
+                conversation_id,
+                e,
+            )
     json_data = {
         'additional_messages': [],
         'parameters': parameters,
