@@ -500,6 +500,9 @@ async def async_call_coze_workflow(
     on_coze_conversation_renewed: Optional[Callable[[str], None]] = None,
     wechat_id: Optional[str] = None,
     wechat_nick_name: Optional[str] = None,
+    trigger_type: str = "user",
+    reception_wechat_id: str = "",
+    reception_app_id: str = "",
 ):
     print(f"===========================================user_id{str(user_id)}，conversation_id{str(conversation_id)}，questions{str(questions)}，open_kfid{str(open_kfid)}")
     # ✅ 关键点：根据 open_kfid 动态获取配置
@@ -512,8 +515,12 @@ async def async_call_coze_workflow(
         'Content-Type': 'application/json',
     }
     parameters: Dict[str, Any] = {'user_id': user_id}
-    parameters['trigger_type'] = 'user'
+    parameters['trigger_type'] = trigger_type
     parameters['conversation_id'] = conversation_id
+    if reception_wechat_id is not None:
+        parameters['reception_wechat_id'] = reception_wechat_id
+    if reception_app_id is not None:
+        parameters['reception_app_id'] = reception_app_id
     if wechat_id is not None:
         parameters['wechat_id'] = wechat_id
     if wechat_nick_name is not None:

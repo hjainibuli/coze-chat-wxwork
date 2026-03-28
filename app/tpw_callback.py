@@ -7,6 +7,8 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import secrets
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import BackgroundTasks
@@ -43,6 +45,73 @@ from tpw_xml import (
 
 # Coze 回复拆成多条 Gewe 文本时的分隔符（后续若改用自定义标记，只改此处）
 COZE_REPLY_MULTIMESSAGE_SPLIT = "\n"
+
+# 定时唤醒构造 AddMsg 时默认 MsgSource（与真实回调示例一致）
+TPW_SCHEDULED_WAKE_DEFAULT_MSG_SOURCE = (
+    "<msgsource>\n"
+    "\t<bizflag>0</bizflag>\n"
+    "\t<pua>1</pua>\n"
+    "\t<eggIncluded>1</eggIncluded>\n"
+    "\t<signature>N0_V1_TriE8fd8|v1_py5beFkX</signature>\n"
+    "\t<tmp_node>\n"
+    "\t\t<publisher-id></publisher-id>\n"
+    "\t</tmp_node>\n"
+    "</msgsource>\n"
+)
+
+
+def _tpw_rand_int_exclusive(upper: int) -> int:
+    """[1, upper) 均匀整数，用于 MsgId / MsgSeq。"""
+    return secrets.randbelow(upper - 1) + 1 if upper > 1 else 1
+
+
+def _tpw_rand_new_msg_id() -> int:
+    """与真实回调同量级的大整数，落在 JSON / MySQL BIGINT 安全范围。"""
+    return secrets.randbelow(9_000_000_000_000_000_000) + 1_000_000_000_000_000_000
+
+
+def build_tpw_scheduled_wake_addmsg_payload(
+    *,
+    appid: str,
+    wxid: str,
+    from_user_name: str,
+    to_user_name: str,
+    content: str = "这是一条自动唤醒跟进的消息",
+    push_content: Optional[str] = None,
+    push_display_name: str = "你说后来",
+    msg_source: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    构造与 Gewe 回调一致的 AddMsg JSON，供定时任务触发，走与 /personal/wechat/callback 相同的 Coze + Gewe 流程。
+    MsgId / NewMsgId / MsgSeq 每次随机；CreateTime 为当前 Unix 秒。
+    """
+    text = (content or "").strip() or "这是一条自动唤醒跟进的消息"
+    if push_content is None:
+        pc = f"{push_display_name.strip() or '用户'} : {text}"
+    else:
+        pc = push_content
+    ms = msg_source if msg_source is not None else TPW_SCHEDULED_WAKE_DEFAULT_MSG_SOURCE
+    now = int(time.time())
+    return {
+        "TypeName": "AddMsg",
+        "Appid": str(appid).strip(),
+        "Data": {
+            "MsgId": _tpw_rand_int_exclusive(2_000_000_000),
+            "FromUserName": {"string": str(from_user_name).strip()},
+            "ToUserName": {"string": str(to_user_name).strip()},
+            "MsgType": 1,
+            "Content": {"string": text},
+            "Status": 3,
+            "ImgStatus": 1,
+            "ImgBuf": {"iLen": 0},
+            "CreateTime": now,
+            "MsgSource": ms,
+            "PushContent": pc,
+            "NewMsgId": _tpw_rand_new_msg_id(),
+            "MsgSeq": _tpw_rand_int_exclusive(2_000_000_000),
+        },
+        "Wxid": str(wxid).strip(),
+    }
 
 
 def _tpw_wechat_nick_from_push_content(push: Any) -> str:
@@ -403,6 +472,7 @@ def _tpw_sync_ingest(data: Dict[str, Any]) -> Dict[str, Any]:
         "device_account_id": device_account_id,
         "wechat_id": from_wxid,
         "wechat_nick_name": _tpw_wechat_nick_from_push_content(d.get("PushContent")),
+        "to_wxid": to_wxid
     }
 
     if media_task:
@@ -537,6 +607,9 @@ async def _tpw_pipeline_async(task: Dict[str, Any]) -> None:
             on_coze_conversation_renewed=on_renew,
             wechat_id=task.get("wechat_id"),
             wechat_nick_name=task.get("wechat_nick_name"),
+            trigger_type=task.get("trigger_type", "user"),
+            reception_wechat_id=task.get("to_wxid", ""),
+            reception_app_id=task.get("appid", ""),
         )
     except Exception:
         LOGGER.exception("tpw Coze 调用异常 message_id=%s", msg_row_id)
@@ -615,7 +688,15 @@ def is_tpw_payload_whitelisted(data: Dict[str, Any], allowed: frozenset[str]) ->
     return from_wxid in allowed
 
 
-async def handle_personal_wechat_payload(data: Dict[str, Any], background_tasks: BackgroundTasks) -> None:
+async def handle_personal_wechat_payload(
+    data: Dict[str, Any],
+    background_tasks: BackgroundTasks,
+    *,
+    trigger_type: Optional[str] = None,
+) -> None:
     outcome = await asyncio.to_thread(_tpw_sync_ingest, data)
     if outcome.get("action") == "queue" and outcome.get("task"):
-        background_tasks.add_task(_tpw_pipeline_async, outcome["task"])
+        task = outcome["task"]
+        if trigger_type is not None:
+            task["trigger_type"] = trigger_type
+        background_tasks.add_task(_tpw_pipeline_async, task)

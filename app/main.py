@@ -10,7 +10,7 @@ from starlette.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Generator
 from ai import ai_reply, ai_reply_coze, async_ai_reply_coze
-from config import LOGGER, WEWORK_CORPID, WEWORK_ENCODING_AES_KEY, WEWORK_TOKEN, TPW_FROM_WXID_WHITELIST
+from config import LOGGER, WEWORK_CORPID, WEWORK_ENCODING_AES_KEY, WEWORK_TOKEN, TPW_FROM_WXID_WHITELIST, TPW_SCHEDULED_WAKE_SECRET
 from kv import get_cursor, get_msg_retry, set_msg_retry
 from schema import WeChatMessage, WeChatTokenMessage, WechatMsgEntity, WechatMsgSendEntity
 from util.wx_biz_json_msg_crypt import WXBizJsonMsgCrypt
@@ -19,7 +19,11 @@ from wework import check_signature, parse_wechat_message, select_msgs, send_text
 from wework import async_send_text_msg, async_handle_media
 from call_coze_api import get_or_create_latest_conversation, call_coze_workflow, get_or_create_internal_user, \
     async_call_coze_workflow
-from tpw_callback import handle_personal_wechat_payload, is_tpw_payload_whitelisted
+from tpw_callback import (
+    build_tpw_scheduled_wake_addmsg_payload,
+    handle_personal_wechat_payload,
+    is_tpw_payload_whitelisted,
+)
 import asyncio
 
 # thread_pool = ThreadPoolExecutor(max_workers=5)  # 创建一个线程池，最大工作线程数为5
@@ -32,6 +36,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class TpwScheduledWakeRequest(BaseModel):
+    """定时唤醒：模拟用户发来固定文案，走与 personal wechat callback 相同的 Coze + Gewe 管道。"""
+    Appid: str
+    Wxid: str
+    FromUserName: str
+    ToUserName: str
+    Content: str = "这是一条自动唤醒跟进的消息"
+    PushContent: Optional[str] = None
+    PushDisplayName: str = "你说后来"
+    MsgSource: Optional[str] = None
+    trigger_type: str = "user"
+
 
 # 挂载静态目录
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -56,6 +74,49 @@ async def personal_wechat_callback(request: Request, background_tasks: Backgroun
     if not is_tpw_payload_whitelisted(data, TPW_FROM_WXID_WHITELIST):
         return {"ok": True, "ignored": True}
     await handle_personal_wechat_payload(data, background_tasks)
+    return {"ok": True}
+
+
+@app.post("/personal/wechat/scheduled-wake")
+async def personal_wechat_scheduled_wake(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    body: TpwScheduledWakeRequest,
+):
+    """
+    供 cron / 定时器调用：构造 synthetic AddMsg（随机 MsgId、NewMsgId、MsgSeq；CreateTime 为当前时间），
+    入参与真实回调一致字段：Appid、Wxid、FromUserName（对方 wxid）、ToUserName（本机 wxid，通常与 Wxid 相同）。
+    若配置 TPW_SCHEDULED_WAKE_SECRET，须在请求头携带 X-TPW-Scheduled-Wake-Secret，且校验通过时不再受 TPW_FROM_WXID_WHITELIST 限制。
+    """
+    hdr = (request.headers.get("X-TPW-Scheduled-Wake-Secret") or "").strip()
+    if TPW_SCHEDULED_WAKE_SECRET:
+        if hdr != TPW_SCHEDULED_WAKE_SECRET:
+            return JSONResponse(content={"ok": False, "error": "unauthorized"}, status_code=401)
+        bypass_whitelist = True
+    else:
+        bypass_whitelist = False
+
+    data = build_tpw_scheduled_wake_addmsg_payload(
+        appid=body.Appid,
+        wxid=body.Wxid,
+        from_user_name=body.FromUserName,
+        to_user_name=body.ToUserName,
+        content=body.Content,
+        push_content=body.PushContent,
+        push_display_name=body.PushDisplayName,
+        msg_source=body.MsgSource,
+    )
+    LOGGER.info(
+        "scheduled-wake synthetic AddMsg: Appid=%s Wxid=%s FromUserName=%s",
+        body.Appid,
+        body.Wxid,
+        body.FromUserName,
+    )
+
+    if not bypass_whitelist and not is_tpw_payload_whitelisted(data, TPW_FROM_WXID_WHITELIST):
+        return {"ok": True, "ignored": True}
+
+    await handle_personal_wechat_payload(data, background_tasks, trigger_type=body.trigger_type)
     return {"ok": True}
 
 

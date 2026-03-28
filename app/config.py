@@ -48,6 +48,9 @@ def _parse_wxid_whitelist(raw: str) -> frozenset[str]:
 
 TPW_FROM_WXID_WHITELIST = _parse_wxid_whitelist(os.getenv("TPW_FROM_WXID_WHITELIST", ""))
 
+# 定时唤醒接口 POST /personal/wechat/scheduled-wake：请求头 X-TPW-Scheduled-Wake-Secret 须与此一致；留空则不校验（仅建议本机/内网）
+TPW_SCHEDULED_WAKE_SECRET = os.getenv("TPW_SCHEDULED_WAKE_SECRET", "").strip()
+
 # 日志配置
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 LOGGER = logging.getLogger(__name__)
