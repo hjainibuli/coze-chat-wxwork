@@ -512,6 +512,8 @@ async def async_call_coze_workflow(
         'Content-Type': 'application/json',
     }
     parameters: Dict[str, Any] = {'user_id': user_id}
+    parameters['trigger_type'] = 'user'
+    parameters['conversation_id'] = conversation_id
     if wechat_id is not None:
         parameters['wechat_id'] = wechat_id
     if wechat_nick_name is not None:

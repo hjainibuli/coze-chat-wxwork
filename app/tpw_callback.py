@@ -90,6 +90,38 @@ def _normalize_coze_message_newlines(s: str) -> str:
     return s.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\r", "\n")
 
 
+def _coze_extract_message_list_text(v: Any, *, max_depth: int = 3) -> str:
+    """
+    兼容 message_list 的多种形态：
+    - 直接是文本
+    - 是 JSON 字符串：{"message_list":"..."}（甚至多层嵌套）
+    - 是 dict：{"message_list": "..."}
+    """
+    cur: Any = v
+    for _ in range(max_depth + 1):
+        if cur is None:
+            return ""
+        if isinstance(cur, dict):
+            if "message_list" in cur:
+                cur = cur.get("message_list")
+                continue
+            return json.dumps(cur, ensure_ascii=False)
+        if isinstance(cur, str):
+            s = cur.strip()
+            if not s:
+                return ""
+            if s[0] in "{[":
+                try:
+                    parsed = json.loads(s)
+                except json.JSONDecodeError:
+                    return s
+                cur = parsed
+                continue
+            return s
+        return str(cur).strip()
+    return str(cur).strip()
+
+
 def _parse_coze_workflow_json_reply(raw: Any) -> Tuple[str, List[str]]:
     """
     Coze 返回 JSON 字符串或 dict。reply 为文本；fileInfos 支持两种形式::
@@ -119,7 +151,7 @@ def _parse_coze_workflow_json_reply(raw: Any) -> Tuple[str, List[str]]:
             return str(raw).strip(), []
 
     reply = obj.get("message_list")
-    reply_text = str(reply).strip() if reply is not None else ""
+    reply_text = _coze_extract_message_list_text(reply)
     reply_text = _normalize_coze_message_newlines(reply_text)
 
     urls: List[str] = []
