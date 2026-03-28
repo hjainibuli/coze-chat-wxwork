@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 import re
 import secrets
 import time
@@ -579,6 +580,18 @@ async def _resolve_gewe_temp_url(task: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _tpw_typing_delay_seconds(text: str) -> float:
+    """
+    根据文本字数模拟打字延迟：
+      - 每 10 字约 1~2 秒（随机），最少 0.5 秒，最多 6 秒。
+    """
+    n = len(text.strip()) if text else 0
+    lo = max(0.5, n / 10 * 0.8)
+    hi = max(lo + 0.5, n / 10 * 2.0)
+    hi = min(hi, 6.0)
+    return random.uniform(lo, hi)
+
+
 async def _tpw_record_coze_reply_sent(
     task: Dict[str, Any],
     *,
@@ -662,6 +675,13 @@ async def _tpw_pipeline_async(task: Dict[str, Any]) -> None:
         return
 
     for idx, chunk in enumerate(chunks):
+        if idx > 0:
+            delay = _tpw_typing_delay_seconds(chunks[idx - 1])
+            LOGGER.debug(
+                "tpw 消息发送间隔 message_id=%s part=%s/%s delay=%.2fs",
+                msg_row_id, idx + 1, len(chunks), delay,
+            )
+            await asyncio.sleep(delay)
         r = await _post_text_with_retry(
             app_id=task["appid"],
             to_wxid=task["peer_wxid"],
